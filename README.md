@@ -1,1 +1,4 @@
-Run ’main.py’.
+Run `main.py`. Requirements:
+
+* matplotlib
+* numpy
