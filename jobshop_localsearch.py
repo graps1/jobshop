@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+from __future__ import annotations
+
 import copy
 import random as rand
 import itertools as it
 import operator as op
+from dataclasses import dataclass
 from functools import reduce
 
 from typing import List, Dict, Set
@@ -18,6 +21,15 @@ class Step:
     step_id: int
     machine: int
     duration: int
+    
+    def __eq__(self, other):
+        return self.job == other.job and self.step_id == other.step_id
+    
+    def __hash__(self):
+        return hash((self.job, self.step_id))
+    
+    def __repr__(self):
+        return self.__str__()
     
     def __str__(self):
         return "S({j}, {s}): {d}@{m}".format(j=self.job, s=self.step_id, d=self.duration, m=self.machine)
@@ -209,27 +221,82 @@ class Schedule:
         for machine in chronology:
             self.schedule[machine] = {}
         
-    def assign(self, *steps: Step):
+    def assign(self, steps):
         """
             Starts each of the steps at the soonest time possible.
             
             This assumes that all constraint regarding step execution are
             satisfied.
         """
-        
         for step in steps:
-            last_step_on_machine = max(self.schedule[step.machine].keys())
-            predecessor_step = self.jobs[step.job][:step.step_id][-2]
+            machine_ready_time, predecessor_done_time = None, None
             
-            machine_ready_time = self.step_execution_time[last_step_on_machine] + last_step_on_machine.duration
-            predecessor_done_time = self.step_execution_time[predecessor_step] + predecessor_step.duration
+            if len(self.schedule[step.machine]) == 0: # first step on machine
+                machine_ready_time = -1
+            else:
+                last_step_execution = max(self.schedule[step.machine].keys())
+                last_step_on_machine = self.schedule[step.machine][last_step_execution] 
+                machine_ready_time = self.step_execution_time[last_step_on_machine] + last_step_on_machine.duration
+            
+            if step.step_id == 0: # first step in job
+                predecessor_done_time = -1
+            else:
+                predecessor_step = self.jobs[step.job][:step.step_id][-1]
+                predecessor_done_time = self.step_execution_time[predecessor_step] + predecessor_step.duration
             
             step_execution_time = max(machine_ready_time, predecessor_done_time) + 1
             
             self.step_execution_time[step] = step_execution_time
             self.schedule[step.machine][step_execution_time] = step
-        
+            
+    def duration(self):
+        min(map(self._end_time(), range(len(self.schedule))))
+            
+    def _end_time(self):
+        schedule = self
+        def do_calc(machine):
+            last_start = max(schedule.schedule[machine])
+            return last_start + schedule.schedule[machine][last_start].duration
+        return do_calc
 
+    def __repr__(self):
+        return self.__str__()
+
+    def __str__(self):
+        return str(self.schedule)
+
+# %%
+
+def chronology2schedule(jobs, chronolgy) -> Schedule:
+    """ Converts a chronology to the quickest schedule induced by it. """
+    
+    dependencies = OperationDependencies(jobs, chronolgy)
+    schedule = Schedule(jobs, chronolgy)
+
+    executable_steps = dependencies.get_executable_steps()
+    while executable_steps:
+        schedule.assign(executable_steps)
+        for step in executable_steps:
+            dependencies = dependencies.mark_step_done(step)
+        executable_steps = dependencies.get_executable_steps()
+
+    return schedule
+
+# %%
+    
+def find_neighbors(jobs, chronology):
+    neighbors = {}
+    for machine, steps in chronology.items():
+        swaps = all_2_swaps(steps)
+        allowed_chronologies = []
+        for swap in swaps:
+            try:
+                OperationDependencies(jobs, swap)
+                allowed_chronologies.append(swap)
+            except CyclicDependencyError:
+                pass
+        neighbors[machine] = allowed_chronologies
+    return neighbors
 
 # %%
 
@@ -241,7 +308,7 @@ n_steps_per_job = 3 #rand.randint(1, 20)
 
 jobs = [generate_steps(job, n_steps_per_job) for job in range(n_jobs)]
 
-""" 
+"""
     A chronology describes the order in which machines execute steps.
     It differs from a complete schedule in that it does not contain any
     timing information. Instead, it only provides a successor relation meaning
@@ -273,3 +340,7 @@ for machine, steps in chronology.items():
 n_neighbors = reduce(op.add, map(len, neighbors.values()))
 
 ods = OperationDependencies(jobs, chronology)
+
+schedule = chronology2schedule(jobs, chronology)
+print("schedule:")
+print(schedule)
