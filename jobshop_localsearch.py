@@ -15,34 +15,35 @@ from typing import List, Dict, Set
 
 @dataclass
 class Step:
-    """ A step is a mere wrapper to capture all of its relevant data. """ 
+    """ A step is a mere wrapper to capture all of its relevant data. """
+
     job: int
     step_id: int
     machine: int
     duration: int
-    
+
     def __eq__(self, other):
         return self.job == other.job and self.step_id == other.step_id
-    
+
     def __hash__(self):
         return hash((self.job, self.step_id))
-    
+
     def __repr__(self):
         return self.__str__()
-    
+
     def __str__(self):
-        return "S({j}, {s}): {d}@{m}".format(j=self.job, s=self.step_id, d=self.duration, m=self.machine)
+        return "S({j}, {s}, m={m}, d={d})".format(j=self.job, s=self.step_id, d=self.duration, m=self.machine)
 
 # %%
 
 def generate_steps(job: int, n_steps: int) -> List[Step]:
     """ Creates steps for random machines and random duration for the *job*. """
-    
+
     return [Step(job, i, rand.randint(0, n_machines-1), rand.randint(1, max_step_duration)) for i in range(n_steps)]
 
 def gather_steps(machine: int, jobs: List[Step]) -> List[Step]:
     """ Collects all of the steps in *jobs* that should be run on *machine*."""
-    
+
     return list(filter(lambda s: s.machine == machine, [step for steps in jobs for step in steps]))
 
 def all_2_swaps(steps: List[Step]) -> List[List[Step]]:
@@ -50,7 +51,7 @@ def all_2_swaps(steps: List[Step]) -> List[List[Step]]:
         Calculates all possible sequences of steps that may be created by
         swapping two steps of the given sequence.
     """
-    
+
     swaps = []
     for first_idx, step1 in enumerate(steps):
         for second_idx, step2 in enumerate(steps[first_idx:]):
@@ -68,57 +69,59 @@ class CyclicDependencyError(Exception):
         Exception to indicate that a set of dependencies is cyclic and may
         therefore not be fulfilled.
     """
-    
-    def __init__(self, step):
+
+    def __init__(self, step, visited=set()):
         self.step = step
-        
+        self.visited=visited
+
     def __repr__(self):
         return self.__str__()
-    
+
     def __str__(self):
-        "Cyclic dependency detected at step {}".format(self.step)
+        return "Cyclic dependency detected at step {} ({})".format(self.step, self.visited)
 
 class UnsatisfiedDepdenciesError(Exception):
     """
         Exception to indiciate that some step still has dependencies left
         unsatisfied and may therefore not be executed.
     """
-    
+
     pass
 
 class OperationDependencies:
     """
         Operation depdencies describe which steps need to be executed prior
         to other steps.
-        
+
         It's main data structure it the `step_dependecies` dict which maps
         each step to a list of other steps that need to be run before.
         These dependecies may be modified by marking suitable steps as executed
         potentially resulting in other steps becoming executable.
-        
+
         `OperationDependencies` should be treated as immutable. Therefore each
         modifying operation instead returns a new instance.
     """
-    
-    def __init__(self, jobs: List[List[Step]], chronology: Dict[int, List[Step]], chronology_dependencies = {}, step_dependencies = {}):
+
+    def __init__(self, jobs: List[List[Step]], chronology: Dict[int, List[Step]], chronology_dependencies = None, step_dependencies = None):
         self.jobs = {i: jobs[i] for i in range(len(jobs))}
         self.chronology = chronology
-        self.chronology_dependencies = chronology_dependencies
-        self.step_dependencies = step_dependencies
-        
+        self.chronology_dependencies = chronology_dependencies if chronology_dependencies else {}
+        self.step_dependencies = step_dependencies if step_dependencies else {}
+
         # if the dependencies have not been initialized yet, do so
         if not chronology_dependencies:
+
             for step in reduce(op.add, jobs):
                 self.step_dependencies[step] = {}
                 self.chronology_dependencies[step] = []
-            
+
             # gather dependencies due to operation sequence of the machines
             for machine in chronology:
                 for step_idx, step in enumerate(chronology[machine]):
                     if step_idx == 0:
                         continue
                     self.chronology_dependencies[step] += chronology[machine][:step_idx]
-            
+
             # gather dependecies due to prior steps in the job as well as
             # transitive depedencies
             for job in jobs:
@@ -126,131 +129,131 @@ class OperationDependencies:
                     self.step_dependencies[step] = set(self.chronology_dependencies[step] + self._collect_transitive_dependencies(step))
         else:
             self.chronology_dependencies = copy.deepcopy(chronology_dependencies)
-            self.step_dependencies = copy.deepcopy(step_dependencies.copy())
-                
+            self.step_dependencies = copy.deepcopy(step_dependencies)
+
     def mark_step_done(self, step: Step) -> OperationDependencies:
         """
             Removes a step as dependency of all other steps.
-        
+
             Thus, after completing one executable step, other steps might
             become executable in turn.
-            
+
             This raises an `UnsatisfiedDepdenciesError` if the `step` still has
             dependencies left.
         """
-        
+
         if self.step_dependencies[step]:
             raise UnsatisfiedDepdenciesError()
-            
+
         resulting_ods = self.__deepcopy__()
-        
+
         # remove the step itself
         resulting_ods.step_dependencies.pop(step)
-        
+
         # as well as all of its occurences as a dependency of aother steps
         for other_deps in resulting_ods.step_dependencies.values():
             if step in other_deps:
                 other_deps.remove(step)
-        
+
         return resulting_ods
-    
+
     def get_executable_steps(self) -> List[Step]:
         """
             Queries for all steps which currently have on dependencies and
             therefore are ready for execution.
         """
-        
+
         return list(
                 map(lambda s: s[0], # unwrap the steps
                     filter(lambda s: s[1] == 0, # get all steps with 0 depedencies
                            # wrap the steps with their dependency counter
                            map(lambda s : (s, len(self.step_dependencies[s])),
                                self.step_dependencies))))
-        
+
     def _collect_transitive_dependencies(self, step: Step, visited: Set[Step] = set()) -> List[Step]:
         """
             Determines the transitive closure of the depends-on relation for step.
-            
+
             In the resulting list, some steps may appear multiple times in case
             more than one other step depends on it.
         """
-        
+
         # The current implementation is pretty straightforward but heavily
         # ineffective.
-        
+
         if step in visited:
-            raise CyclicDependencyError(step)
-        
+            raise CyclicDependencyError(step, visited)
+
         visited = visited.copy()
         visited.add(step)
-        
+
         # predecessors are those steps for the current job, that have to be
         # executed before this step
-        predecessors = self.jobs[step.job][:step.step_id]        
-        chronology_dependencies = self.chronology_dependencies[step]        
+        predecessors = self.jobs[step.job][:step.step_id]
+        chronology_dependencies = self.chronology_dependencies[step]
         direct_dependencies = predecessors + chronology_dependencies
-        
+
         transitive_dependencies = direct_dependencies.copy()
-        
+
         for dependency in direct_dependencies:
             transitive_dependencies += self._collect_transitive_dependencies(dependency, visited)
-            
+
         return transitive_dependencies
-        
+
     def __deepcopy__(self) -> OperationDependencies:
         return OperationDependencies(list(self.jobs.values()), self.chronology, self.chronology_dependencies, self.step_dependencies)
-    
+
     def __repr__(self):
         return self.__str__()
-    
+
     def __str__(self):
         return str(self.step_dependencies)
-    
+
 # %%
 
 class Schedule:
     """ A schedule describes which step is started at which point in time. """
-    
+
     def __init__(self, jobs: List[List[Step]], chronology: Dict[int, List[Step]]):
         self.jobs = jobs
         self.chronology = chronology
         self.step_execution_time: Dict[Step, int] = {}
         self.schedule: Dict[int, Dict[int, Step]] = {}
-        
+
         for machine in chronology:
             self.schedule[machine] = {}
-        
+
     def assign(self, steps):
         """
             Starts each of the steps at the soonest time possible.
-            
+
             This assumes that all constraint regarding step execution are
             satisfied.
         """
         for step in steps:
             machine_ready_time, predecessor_done_time = None, None
-            
+
             if len(self.schedule[step.machine]) == 0: # first step on machine
-                machine_ready_time = -1
+                machine_ready_time = 0
             else:
                 last_step_execution = max(self.schedule[step.machine].keys())
-                last_step_on_machine = self.schedule[step.machine][last_step_execution] 
+                last_step_on_machine = self.schedule[step.machine][last_step_execution]
                 machine_ready_time = self.step_execution_time[last_step_on_machine] + last_step_on_machine.duration
-            
+
             if step.step_id == 0: # first step in job
-                predecessor_done_time = -1
+                predecessor_done_time = 0
             else:
                 predecessor_step = self.jobs[step.job][:step.step_id][-1]
                 predecessor_done_time = self.step_execution_time[predecessor_step] + predecessor_step.duration
-            
-            step_execution_time = max(machine_ready_time, predecessor_done_time) + 1
-            
+
+            step_execution_time = max(machine_ready_time, predecessor_done_time)
+
             self.step_execution_time[step] = step_execution_time
             self.schedule[step.machine][step_execution_time] = step
-            
+
     def duration(self):
-        min(map(self._end_time(), range(len(self.schedule))))
-            
+        return max(map(self._end_time(), range(len(self.schedule))))
+
     def _end_time(self):
         schedule = self
         def do_calc(machine):
@@ -268,7 +271,7 @@ class Schedule:
 
 def chronology2schedule(jobs, chronolgy) -> Schedule:
     """ Converts a chronology to the quickest schedule induced by it. """
-    
+
     dependencies = OperationDependencies(jobs, chronolgy)
     schedule = Schedule(jobs, chronolgy)
 
@@ -282,20 +285,73 @@ def chronology2schedule(jobs, chronolgy) -> Schedule:
     return schedule
 
 # %%
-    
+
 def find_neighbors(jobs, chronology):
-    neighbors = {}
+    allowed_chronologies = []
     for machine, steps in chronology.items():
         swaps = all_2_swaps(steps)
-        allowed_chronologies = []
         for swap in swaps:
             try:
-                OperationDependencies(jobs, swap)
-                allowed_chronologies.append(swap)
+                resulting_chrono = copy.deepcopy(chronology)
+                resulting_chrono[machine] = swap
+                OperationDependencies(jobs, resulting_chrono)
+                allowed_chronologies.append(resulting_chrono)
             except CyclicDependencyError:
                 pass
-        neighbors[machine] = allowed_chronologies
-    return neighbors
+
+    return allowed_chronologies
+
+# %%
+
+def random_chronology(jobs, requires_validity=False):
+    def generate_chronology(jobs):
+        chronology = {m: gather_steps(m, jobs) for m in range(n_machines)}
+
+        for machine in chronology:
+            rand.shuffle(chronology[machine])
+
+        return chronology
+
+    valid_chronology = False
+    chronology = generate_chronology(jobs)
+    while not valid_chronology and requires_validity:
+        try:
+            chronology = generate_chronology(jobs)
+            OperationDependencies(jobs, chronology)
+            valid_chronology = True
+        except CyclicDependencyError:
+            pass
+
+    return chronology
+
+
+
+# %%
+
+def search_hillclimber(jobs):
+    max_tries = 100
+    current_chronology = random_chronology(jobs, requires_validity=True)
+    best_schedule = chronology2schedule(jobs, current_chronology)
+    it = 0
+    while it < max_tries:
+        current_chronology = random_chronology(jobs, requires_validity=True)
+        plateaued = False
+        while not plateaued:
+            neighbors = find_neighbors(jobs, current_chronology)
+            neighbors_eval = { chronology2schedule(jobs, neighbor).duration() : neighbor for neighbor in neighbors }
+            best_eval = min(neighbors_eval)
+            best_neighbor = neighbors_eval[best_eval]
+            if best_eval < chronology2schedule(jobs, current_chronology).duration():
+                current_chronology = best_neighbor
+            else:
+                plateaued = True
+            it += 1
+        current_schedule = chronology2schedule(jobs, current_chronology)
+        if current_schedule.duration() < best_schedule.duration():
+            best_schedule = current_schedule
+
+    return best_schedule, it
+
 # %%
 
 if __name__=="__main__":
@@ -312,7 +368,7 @@ if __name__=="__main__":
         It differs from a complete schedule in that it does not contain any
         timing information. Instead, it only provides a successor relation meaning
         that a certain step has to be executed before another.
-        
+
         Starting with a chronology it is quite easy to create a full-fledged
         schedule: a padding has to be introduced to accomodate for the dependencies
         between steps of the same job.
@@ -345,4 +401,4 @@ if __name__=="__main__":
     print(schedule)
     from renderer import render_jls
     render_jls(n_machines,n_jobs,schedule)
-    
+
