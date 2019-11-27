@@ -15,8 +15,7 @@ from typing import List, Dict, Set
 
 @dataclass
 class Step:
-    """ A step is a mere wrapper to capture all of its relevant data. """
-    
+    """ A step is a mere wrapper to capture all of its relevant data. """ 
     job: int
     step_id: int
     machine: int
@@ -101,7 +100,7 @@ class OperationDependencies:
         modifying operation instead returns a new instance.
     """
     
-    def __init__(self, jobs: List[List[Step]], chronoloy: Dict[int, List[Step]], chronology_dependencies = {}, step_dependencies = {}):
+    def __init__(self, jobs: List[List[Step]], chronology: Dict[int, List[Step]], chronology_dependencies = {}, step_dependencies = {}):
         self.jobs = {i: jobs[i] for i in range(len(jobs))}
         self.chronology = chronology
         self.chronology_dependencies = chronology_dependencies
@@ -297,50 +296,53 @@ def find_neighbors(jobs, chronology):
                 pass
         neighbors[machine] = allowed_chronologies
     return neighbors
-
 # %%
 
-max_step_duration = 20
+if __name__=="__main__":
+    max_step_duration = 20
 
-n_machines = 2 #rand.randint(2, 20)
-n_jobs = 2 #rand.randint(1, 20)
-n_steps_per_job = 3 #rand.randint(1, 20)
+    n_machines = 5 #rand.randint(2, 20)
+    n_jobs = 5 #rand.randint(1, 20)
+    n_steps_per_job = 5 #rand.randint(1, 20)
 
-jobs = [generate_steps(job, n_steps_per_job) for job in range(n_jobs)]
+    jobs = [generate_steps(job, n_steps_per_job) for job in range(n_jobs)]
+    print(jobs)
+    """
+        A chronology describes the order in which machines execute steps.
+        It differs from a complete schedule in that it does not contain any
+        timing information. Instead, it only provides a successor relation meaning
+        that a certain step has to be executed before another.
+        
+        Starting with a chronology it is quite easy to create a full-fledged
+        schedule: a padding has to be introduced to accomodate for the dependencies
+        between steps of the same job.
+        In one special case a chronology may be degenerated meaning that it is
+        impossible to to create a schedule for it. This case occurs if the
+        chronology contains a cyclic dependency.
+    """
+    chronology = {m: gather_steps(m, jobs) for m in range(n_machines)}
 
-"""
-    A chronology describes the order in which machines execute steps.
-    It differs from a complete schedule in that it does not contain any
-    timing information. Instead, it only provides a successor relation meaning
-    that a certain step has to be executed before another.
+    print("machines:", n_machines)
+    print("jobs:", n_jobs)
+    print("steps / job:", n_steps_per_job)
+    print("jobs:", jobs)
+    print("chronology:", chronology)
+
+    # neighbors = reduce(lambda m1, m2: it.product(m1, m2), map(it.permutations, chronology.values()))
+
+    # %%
+
+    neighbors = {}
+    for machine, steps in chronology.items():
+        neighbors[machine] = all_2_swaps(steps)
+
+    n_neighbors = reduce(op.add, map(len, neighbors.values()))
+
+    ods = OperationDependencies(jobs, chronology)
+
+    schedule = chronology2schedule(jobs, chronology)
+    print("schedule:")
+    print(schedule)
+    from renderer import render_jls
+    render_jls(n_machines,n_jobs,schedule)
     
-    Starting with a chronology it is quite easy to create a full-fledged
-    schedule: a padding has to be introduced to accomodate for the dependencies
-    between steps of the same job.
-    In one special case a chronology may be degenerated meaning that it is
-    impossible to to create a schedule for it. This case occurs if the
-    chronology contains a cyclic dependency.
-"""
-chronology = {m: gather_steps(m, jobs) for m in range(n_machines)}
-
-print("machines:", n_machines)
-print("jobs:", n_jobs)
-print("steps / job:", n_steps_per_job)
-print("jobs:", jobs)
-print("chronology:", chronology)
-
-# neighbors = reduce(lambda m1, m2: it.product(m1, m2), map(it.permutations, chronology.values()))
-
-# %%
-
-neighbors = {}
-for machine, steps in chronology.items():
-    neighbors[machine] = all_2_swaps(steps)
-
-n_neighbors = reduce(op.add, map(len, neighbors.values()))
-
-ods = OperationDependencies(jobs, chronology)
-
-schedule = chronology2schedule(jobs, chronology)
-print("schedule:")
-print(schedule)
