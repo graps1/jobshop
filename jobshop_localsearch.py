@@ -13,14 +13,21 @@ from functools import reduce
 from typing import List, Dict, Set
 # %%
 
+Job = int
+StepId = int
+Machine = int
+Duration = int
+
+# %%
+
 @dataclass
 class Step:
     """ A step is a mere wrapper to capture all of its relevant data. """
 
-    job: int
-    step_id: int
-    machine: int
-    duration: int
+    job: Job
+    step_id: StepId
+    machine: Machine
+    duration: Duration
 
     def __eq__(self, other):
         return self.job == other.job and self.step_id == other.step_id
@@ -36,12 +43,17 @@ class Step:
 
 # %%
 
-def generate_steps(job: int, n_steps: int) -> List[Step]:
+Chronology = Dict[Machine, List[Step]]
+Jobs = List[List[Step]]
+
+# %%
+
+def generate_steps(job: Job, n_steps: int) -> List[Step]:
     """ Creates steps for random machines and random duration for the *job*. """
 
     return [Step(job, i, rand.randint(0, n_machines-1), rand.randint(1, max_step_duration)) for i in range(n_steps)]
 
-def gather_steps(machine: int, jobs: List[Step]) -> List[Step]:
+def gather_steps(machine: Machine, jobs: List[List[Step]]) -> List[Step]:
     """ Collects all of the steps in *jobs* that should be run on *machine*."""
 
     return list(filter(lambda s: s.machine == machine, [step for steps in jobs for step in steps]))
@@ -70,7 +82,7 @@ class CyclicDependencyError(Exception):
         therefore not be fulfilled.
     """
 
-    def __init__(self, step, visited=set()):
+    def __init__(self, step: Step, visited: Set[Step] = set() ):
         self.step = step
         self.visited=visited
 
@@ -102,7 +114,7 @@ class OperationDependencies:
         modifying operation instead returns a new instance.
     """
 
-    def __init__(self, jobs: List[List[Step]], chronology: Dict[int, List[Step]], chronology_dependencies = None, step_dependencies = None):
+    def __init__(self, jobs: List[List[Step]], chronology: Dict[Machine, List[Step]], chronology_dependencies = None, step_dependencies = None):
         self.jobs = {i: jobs[i] for i in range(len(jobs))}
         self.chronology = chronology
         self.chronology_dependencies = chronology_dependencies if chronology_dependencies else {}
@@ -211,10 +223,13 @@ class OperationDependencies:
 
 # %%
 
+
+# %%
+
 class Schedule:
     """ A schedule describes which step is started at which point in time. """
 
-    def __init__(self, jobs: List[List[Step]], chronology: Dict[int, List[Step]]):
+    def __init__(self, jobs: List[List[Step]], chronology: Dict[Machine, List[Step]]):
         self.jobs = jobs
         self.chronology = chronology
         self.step_execution_time: Dict[Step, int] = {}
@@ -269,7 +284,7 @@ class Schedule:
 
 # %%
 
-def chronology2schedule(jobs, chronolgy) -> Schedule:
+def chronology2schedule(jobs: Jobs, chronolgy: Chronology) -> Schedule:
     """ Converts a chronology to the quickest schedule induced by it. """
 
     dependencies = OperationDependencies(jobs, chronolgy)
@@ -286,7 +301,7 @@ def chronology2schedule(jobs, chronolgy) -> Schedule:
 
 # %%
 
-def find_neighbors(jobs, chronology):
+def find_neighbors(jobs, chronology) -> List[Chronology]:
     allowed_chronologies = []
     for machine, steps in chronology.items():
         swaps = all_2_swaps(steps)
@@ -303,7 +318,7 @@ def find_neighbors(jobs, chronology):
 
 # %%
 
-def random_chronology(jobs, requires_validity=False):
+def random_chronology(jobs, requires_validity=False) -> Chronology:
     def generate_chronology(jobs):
         chronology = {m: gather_steps(m, jobs) for m in range(n_machines)}
 
@@ -324,16 +339,16 @@ def random_chronology(jobs, requires_validity=False):
 
     return chronology
 
-
-
 # %%
 
-def search_hillclimber(jobs):
-    max_tries = 100
+def search_hillclimber_iterated(jobs, n_iterations=100):
+    steps = []
     current_chronology = random_chronology(jobs, requires_validity=True)
     best_schedule = chronology2schedule(jobs, current_chronology)
-    it = 0
-    while it < max_tries:
+    i = 0
+    while i < n_iterations:
+        s = 0
+        print(i)
         current_chronology = random_chronology(jobs, requires_validity=True)
         plateaued = False
         while not plateaued:
@@ -345,12 +360,88 @@ def search_hillclimber(jobs):
                 current_chronology = best_neighbor
             else:
                 plateaued = True
-            it += 1
+            s += 1
+        steps.append(s)
+        i += 1
         current_schedule = chronology2schedule(jobs, current_chronology)
         if current_schedule.duration() < best_schedule.duration():
             best_schedule = current_schedule
 
-    return best_schedule, it
+    return best_schedule, steps
+
+# %%
+
+def shc_selection_prop(current_eval, new_eval, T=10):
+    return 1 / (1 + math.e**((current_eval - new_eval) / T))
+
+def search_hillclimber_stochastic(jobs, n_iterations=100, merit_weight=10):
+    i = 0
+    while i < n_iterations:
+        current_chronology = random_chronology(jobs, requires_validity=True)
+        print(i)
+        neighbors = find_neighbors(jobs, current_chronology)
+        selected_neighbor = rand.choice(neighbors)
+        selection_eval = chronology2schedule(jobs, selected_neighbor).duration()
+        current_eval = chronology2schedule(jobs, current_chronology).duration()
+
+        choice_prop = shc_selection_prop(current_eval, selection_eval, merit_weight)
+        update = rand.uniform(0, 1) < choice_prop
+
+        if update:
+            current_chronology = selected_neighbor
+
+        i += 1
+    return chronology2schedule(jobs, current_chronology)
+
+# %%
+
+def sa_selection_prop(current_eval, new_eval, T):
+    return math.e**((-current_eval - new_eval) / T)
+
+def cool_down(current_chronology, iterations, temp, temp_max, cooling_ratio):
+    return temp_max * math.e**(-iterations * cooling_ratio)
+
+def search_simulatedannealing(jobs, n_iterations=100, initial_temp=100, min_temp=0.5, max_temp=100, cooling_ratio=.5):
+    i = 0
+    best_schedule = None
+    while i < n_iterations:
+        current_chronology = random_chronology(jobs, requires_validity=True)
+        current_schedule = chronology2schedule(jobs, current_chronology)
+
+        if best_schedule is None:
+            best_schedule = current_schedule
+
+        print("## Run", i)
+        temp = initial_temp
+        r = 0
+        while temp > min_temp:
+            print("temp={}".format(temp))
+            neighbors = find_neighbors(jobs, current_chronology)
+            selected_neighbor = rand.choice(neighbors)
+            selected_schedule = chronology2schedule(jobs, selected_neighbor)
+            selection_eval = selected_schedule.duration()
+            current_eval = current_schedule.duration()
+
+            if selection_eval < current_eval:
+                current_chronology = selected_neighbor
+                current_schedule = selected_schedule
+            elif rand.uniform(0, 1) < sa_selection_prop(current_eval, selection_eval, temp):
+                current_chronology = selected_neighbor
+                current_schedule = selected_schedule
+                temp = cool_down(current_chronology, r, temp, max_temp, cooling_ratio)
+                r += 1
+            else:
+                temp = cool_down(current_chronology, r, temp, max_temp, cooling_ratio)
+                r += 1
+
+        i += 1
+
+        if current_schedule.duration() < best_schedule.duration():
+            best_schedule = current_schedule
+            print("New best:", best_schedule.duration())
+
+
+    return best_schedule
 
 # %%
 
