@@ -4,8 +4,8 @@
 from __future__ import annotations
 
 import copy
+import math
 import random as rand
-import itertools as it
 import operator as op
 from dataclasses import dataclass
 from functools import reduce
@@ -82,15 +82,7 @@ class CyclicDependencyError(Exception):
         therefore not be fulfilled.
     """
 
-    def __init__(self, step: Step, visited: Set[Step] = set() ):
-        self.step = step
-        self.visited=visited
-
-    def __repr__(self):
-        return self.__str__()
-
-    def __str__(self):
-        return "Cyclic dependency detected at step {} ({})".format(self.step, self.visited)
+    pass
 
 class UnsatisfiedDepdenciesError(Exception):
     """
@@ -114,34 +106,42 @@ class OperationDependencies:
         modifying operation instead returns a new instance.
     """
 
-    def __init__(self, jobs: List[List[Step]], chronology: Dict[Machine, List[Step]], chronology_dependencies = None, step_dependencies = None):
+    def __init__(self,
+                 jobs: List[List[Step]],
+                 chronology: Dict[Machine, List[Step]],
+                 dependency_graph: Dict[Step, List[Step]]=None,
+                 dependant_steps: Dict[Step, List[Step]]=None):
+
         self.jobs = {i: jobs[i] for i in range(len(jobs))}
         self.chronology = chronology
-        self.chronology_dependencies = chronology_dependencies if chronology_dependencies else {}
-        self.step_dependencies = step_dependencies if step_dependencies else {}
 
-        # if the dependencies have not been initialized yet, do so
-        if not chronology_dependencies:
+        all_steps = reduce(op.add, jobs)
 
-            for step in reduce(op.add, jobs):
-                self.step_dependencies[step] = {}
-                self.chronology_dependencies[step] = []
+        if dependency_graph is None:
+            self.dependency_graph: Dict[Step, List[Step]] = {}
+            self.dependant_steps: Dict[Step, List[Step]] = {}
+            for step in all_steps:
+                step_predecessors = set()
 
-            # gather dependencies due to operation sequence of the machines
-            for machine in chronology:
-                for step_idx, step in enumerate(chronology[machine]):
-                    if step_idx == 0:
-                        continue
-                    self.chronology_dependencies[step] += chronology[machine][:step_idx]
+                machine_seq = chronology[step.machine]
+                machine_pred_idx = machine_seq.index(step) - 1
+                if machine_pred_idx >= 0:
+                    step_predecessors.add(machine_seq[machine_pred_idx])
 
-            # gather dependecies due to prior steps in the job as well as
-            # transitive depedencies
-            for job in jobs:
-                for step_idx, step in enumerate(job):
-                    self.step_dependencies[step] = set(self.chronology_dependencies[step] + self._collect_transitive_dependencies(step))
+                job_pred_idx = step.step_id - 1
+                if job_pred_idx >= 0:
+                    step_predecessors.add(jobs[step.job][job_pred_idx])
+
+                self.dependency_graph[step] = step_predecessors
+
+                for predecessor in step_predecessors:
+                    dependants = self.dependant_steps.setdefault(predecessor, set())
+                    dependants.add(step)
         else:
-            self.chronology_dependencies = copy.deepcopy(chronology_dependencies)
-            self.step_dependencies = copy.deepcopy(step_dependencies)
+            self.dependency_graph = dependency_graph
+            self.dependant_steps = dependant_steps
+
+        self.n_steps = len(all_steps)
 
     def mark_step_done(self, step: Step) -> OperationDependencies:
         """
@@ -154,20 +154,20 @@ class OperationDependencies:
             dependencies left.
         """
 
-        if self.step_dependencies[step]:
+        if self.dependency_graph[step]:
             raise UnsatisfiedDepdenciesError()
 
-        resulting_ods = self.__deepcopy__()
+        new_graph = copy.deepcopy(self.dependency_graph)
+        new_dependants = copy.deepcopy(self.dependant_steps)
 
-        # remove the step itself
-        resulting_ods.step_dependencies.pop(step)
+        if step in new_dependants:
+            for dependant in new_dependants[step]:
+                new_graph[dependant].remove(step) # no step depends on this step anymore
+            del new_dependants[step] # this step is no dependency anymore
 
-        # as well as all of its occurences as a dependency of aother steps
-        for other_deps in resulting_ods.step_dependencies.values():
-            if step in other_deps:
-                other_deps.remove(step)
+        del new_graph[step]
 
-        return resulting_ods
+        return OperationDependencies(list(self.jobs.values()), self.chronology, new_graph, new_dependants)
 
     def get_executable_steps(self) -> List[Step]:
         """
@@ -179,47 +179,14 @@ class OperationDependencies:
                 map(lambda s: s[0], # unwrap the steps
                     filter(lambda s: s[1] == 0, # get all steps with 0 depedencies
                            # wrap the steps with their dependency counter
-                           map(lambda s : (s, len(self.step_dependencies[s])),
-                               self.step_dependencies))))
-
-    def _collect_transitive_dependencies(self, step: Step, visited: Set[Step] = set()) -> List[Step]:
-        """
-            Determines the transitive closure of the depends-on relation for step.
-
-            In the resulting list, some steps may appear multiple times in case
-            more than one other step depends on it.
-        """
-
-        # The current implementation is pretty straightforward but heavily
-        # ineffective.
-
-        if step in visited:
-            raise CyclicDependencyError(step, visited)
-
-        visited = visited.copy()
-        visited.add(step)
-
-        # predecessors are those steps for the current job, that have to be
-        # executed before this step
-        predecessors = self.jobs[step.job][:step.step_id]
-        chronology_dependencies = self.chronology_dependencies[step]
-        direct_dependencies = predecessors + chronology_dependencies
-
-        transitive_dependencies = direct_dependencies.copy()
-
-        for dependency in direct_dependencies:
-            transitive_dependencies += self._collect_transitive_dependencies(dependency, visited)
-
-        return transitive_dependencies
-
-    def __deepcopy__(self) -> OperationDependencies:
-        return OperationDependencies(list(self.jobs.values()), self.chronology, self.chronology_dependencies, self.step_dependencies)
+                           map(lambda s : (s[0], len(s[1])),
+                               self.dependency_graph.items()))))
 
     def __repr__(self):
         return self.__str__()
 
     def __str__(self):
-        return str(self.step_dependencies)
+        return str(self.dependency_graph)
 
 # %%
 
@@ -234,6 +201,7 @@ class Schedule:
         self.chronology = chronology
         self.step_execution_time: Dict[Step, int] = {}
         self.schedule: Dict[int, Dict[int, Step]] = {}
+        self.n_steps = 0
 
         for machine in chronology:
             self.schedule[machine] = {}
@@ -245,6 +213,7 @@ class Schedule:
             This assumes that all constraint regarding step execution are
             satisfied.
         """
+
         for step in steps:
             machine_ready_time, predecessor_done_time = None, None
 
@@ -265,6 +234,8 @@ class Schedule:
 
             self.step_execution_time[step] = step_execution_time
             self.schedule[step.machine][step_execution_time] = step
+
+        self.n_steps += len(steps)
 
     def duration(self):
         return max(map(self._end_time(), range(len(self.schedule))))
@@ -290,18 +261,23 @@ def chronology2schedule(jobs: Jobs, chronolgy: Chronology) -> Schedule:
     dependencies = OperationDependencies(jobs, chronolgy)
     schedule = Schedule(jobs, chronolgy)
 
+    i = 0
     executable_steps = dependencies.get_executable_steps()
     while executable_steps:
         schedule.assign(executable_steps)
         for step in executable_steps:
             dependencies = dependencies.mark_step_done(step)
         executable_steps = dependencies.get_executable_steps()
+        i += 1
+
+    if schedule.n_steps < dependencies.n_steps:
+        raise CyclicDependencyError()
 
     return schedule
 
 # %%
 
-def find_neighbors(jobs, chronology) -> List[Chronology]:
+def find_neighbors(jobs, chronology) -> List[(Chronology, Schedule)]:
     allowed_chronologies = []
     for machine, steps in chronology.items():
         swaps = all_2_swaps(steps)
@@ -309,8 +285,8 @@ def find_neighbors(jobs, chronology) -> List[Chronology]:
             try:
                 resulting_chrono = copy.deepcopy(chronology)
                 resulting_chrono[machine] = swap
-                OperationDependencies(jobs, resulting_chrono)
-                allowed_chronologies.append(resulting_chrono)
+                resulting_schedule = chronology2schedule(jobs, chronology)
+                allowed_chronologies.append((resulting_chrono, resulting_schedule))
             except CyclicDependencyError:
                 pass
 
@@ -318,7 +294,7 @@ def find_neighbors(jobs, chronology) -> List[Chronology]:
 
 # %%
 
-def random_chronology(jobs, requires_validity=False) -> Chronology:
+def random_chronology(jobs, requires_validity=False) -> (Chronology, Schedule):
     def generate_chronology(jobs):
         chronology = {m: gather_steps(m, jobs) for m in range(n_machines)}
 
@@ -329,15 +305,19 @@ def random_chronology(jobs, requires_validity=False) -> Chronology:
 
     valid_chronology = False
     chronology = generate_chronology(jobs)
+    schedule = None
+    tries = 0
+    invalids = []
     while not valid_chronology and requires_validity:
+        tries += 1
         try:
             chronology = generate_chronology(jobs)
-            OperationDependencies(jobs, chronology)
+            schedule = chronology2schedule(jobs, chronology)
             valid_chronology = True
         except CyclicDependencyError:
-            pass
+            invalids.append(chronology)
 
-    return chronology
+    return chronology, schedule, invalids
 
 # %%
 
@@ -353,7 +333,7 @@ def search_hillclimber_iterated(jobs, n_iterations=100):
         plateaued = False
         while not plateaued:
             neighbors = find_neighbors(jobs, current_chronology)
-            neighbors_eval = { chronology2schedule(jobs, neighbor).duration() : neighbor for neighbor in neighbors }
+            neighbors_eval = { neighbor[1].duration() : neighbor[0] for neighbor in neighbors }
             best_eval = min(neighbors_eval)
             best_neighbor = neighbors_eval[best_eval]
             if best_eval < chronology2schedule(jobs, current_chronology).duration():
@@ -381,14 +361,14 @@ def search_hillclimber_stochastic(jobs, n_iterations=100, merit_weight=10):
         print(i)
         neighbors = find_neighbors(jobs, current_chronology)
         selected_neighbor = rand.choice(neighbors)
-        selection_eval = chronology2schedule(jobs, selected_neighbor).duration()
+        selection_eval = selected_neighbor[1].duration()
         current_eval = chronology2schedule(jobs, current_chronology).duration()
 
         choice_prop = shc_selection_prop(current_eval, selection_eval, merit_weight)
         update = rand.uniform(0, 1) < choice_prop
 
         if update:
-            current_chronology = selected_neighbor
+            current_chronology = selected_neighbor[0]
 
         i += 1
     return chronology2schedule(jobs, current_chronology)
@@ -418,15 +398,15 @@ def search_simulatedannealing(jobs, n_iterations=100, initial_temp=100, min_temp
             print("temp={}".format(temp))
             neighbors = find_neighbors(jobs, current_chronology)
             selected_neighbor = rand.choice(neighbors)
-            selected_schedule = chronology2schedule(jobs, selected_neighbor)
+            selected_schedule = selected_neighbor[1]
             selection_eval = selected_schedule.duration()
             current_eval = current_schedule.duration()
 
             if selection_eval < current_eval:
-                current_chronology = selected_neighbor
+                current_chronology = selected_neighbor[0]
                 current_schedule = selected_schedule
             elif rand.uniform(0, 1) < sa_selection_prop(current_eval, selection_eval, temp):
-                current_chronology = selected_neighbor
+                current_chronology = selected_neighbor[0]
                 current_schedule = selected_schedule
                 temp = cool_down(current_chronology, r, temp, max_temp, cooling_ratio)
                 r += 1
