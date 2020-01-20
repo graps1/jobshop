@@ -1,4 +1,1 @@
-Run `main.py`. Requirements:
-
-* matplotlib
-* numpy
+See `viz.ipynb`.
