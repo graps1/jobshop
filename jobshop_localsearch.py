@@ -320,13 +320,14 @@ def random_chronology(jobs) -> Chronology:
 # %%
 
 def search_hillclimber_iterated(jobs, n_iterations=10):
-    steps = []
+    vals = []
     current_chronology = random_chronology(jobs)
     best_schedule = chronology2schedule(jobs, current_chronology)
+    vals.append(best_schedule.duration())
     i = 0
     while i < n_iterations:
         s = 0
-        print(i)
+        print("{}/{}".format(str(i+1).zfill(len(str(n_iterations))), n_iterations), end="\r")
         current_chronology = random_chronology(jobs)
         plateaued = False
         while not plateaued:
@@ -339,13 +340,12 @@ def search_hillclimber_iterated(jobs, n_iterations=10):
             else:
                 plateaued = True
             s += 1
-        steps.append(s)
         i += 1
         current_schedule = chronology2schedule(jobs, current_chronology)
         if current_schedule.duration() < best_schedule.duration():
             best_schedule = current_schedule
-
-    return best_schedule, steps
+        vals.append(best_schedule.duration())
+    return best_schedule, vals
 
 # %%
 

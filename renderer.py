@@ -3,9 +3,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 import jobshop_localsearch as jls
 
+fontsize=14
+
 def __display(mat):
-    fig = plt.figure()
+    fig = plt.figure(figsize=(20,7))
     ax = fig.add_subplot(111)
+    plt.xlabel("time", size=fontsize)
+    plt.ylabel("machines", size=fontsize)
     ax.imshow(mat, interpolation ="nearest")
     ax.set_aspect(aspect="auto")
     plt.show()
@@ -23,6 +27,14 @@ def render(problem, trajectory):
                 mat[i, rt_off:rt_stop] = (state.last_step.job+0.5) / problem.nr_jobs
         last_state = state
     __display(mat)
+
+def render_improvement(values):
+    fig = plt.figure(figsize=(20,7))
+    ax = fig.add_subplot(111)
+    plt.xlabel("iteration", size=fontsize)
+    plt.ylabel("evaluation", size=fontsize)
+    plt.plot(range(len(values)), values, "gx:")
+    plt.show()
 
 def render_jls(nr_machines, nr_jobs, schedule : jls.Schedule):
     s = schedule.schedule
