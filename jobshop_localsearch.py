@@ -260,7 +260,7 @@ def chronology2schedule(jobs: Jobs, chronolgy: Chronology) -> Schedule:
 
     dependencies = OperationDependencies(jobs, chronolgy)
     schedule = Schedule(jobs, chronolgy)
-
+    
     i = 0
     executable_steps = dependencies.get_executable_steps()
     while executable_steps:
@@ -294,42 +294,40 @@ def find_neighbors(jobs, chronology) -> List[(Chronology, Schedule)]:
 
 # %%
 
-def random_chronology(jobs, requires_validity=False) -> (Chronology, Schedule):
-    def generate_chronology(jobs):
-        chronology = {m: gather_steps(m, jobs) for m in range(n_machines)}
-
-        for machine in chronology:
-            rand.shuffle(chronology[machine])
-
-        return chronology
-
-    valid_chronology = False
-    chronology = generate_chronology(jobs)
-    schedule = None
-    tries = 0
-    invalids = []
-    while not valid_chronology and requires_validity:
-        tries += 1
-        try:
-            chronology = generate_chronology(jobs)
-            schedule = chronology2schedule(jobs, chronology)
-            valid_chronology = True
-        except CyclicDependencyError:
-            invalids.append(chronology)
-
-    return chronology, schedule, invalids
+def random_chronology(jobs) -> Chronology:
+    # get initial steps
+    choices = {m: [step for step in gather_steps(m,jobs) if step.step_id == 0] for m in range(n_machines)}
+    # start w/ empty chronology
+    chronology = {}
+    # contains steps which are already in the chronology
+    # while we have steps left ...
+    while any([len(choices[machine])>0 for machine in choices]):
+        # add one random step for each machine to the chronology
+        for machine in choices:
+            if machine not in chronology:
+                chronology[machine] = []
+            if len(choices[machine]) > 0:
+                choosen = rand.choice(choices[machine])
+                chronology[machine].append(choosen)
+                # remove the choosen step from the set of choices, but before that: 
+                # add its successor to the list of possible choices
+                if choosen.step_id + 1 < len(jobs[choosen.job]):
+                    next_step = jobs[choosen.job][choosen.step_id + 1]
+                    choices[next_step.machine].append(next_step)
+                choices[machine].remove(choosen)
+    return chronology
 
 # %%
 
-def search_hillclimber_iterated(jobs, n_iterations=100):
+def search_hillclimber_iterated(jobs, n_iterations=10):
     steps = []
-    current_chronology = random_chronology(jobs, requires_validity=True)
+    current_chronology = random_chronology(jobs)
     best_schedule = chronology2schedule(jobs, current_chronology)
     i = 0
     while i < n_iterations:
         s = 0
         print(i)
-        current_chronology = random_chronology(jobs, requires_validity=True)
+        current_chronology = random_chronology(jobs)
         plateaued = False
         while not plateaued:
             neighbors = find_neighbors(jobs, current_chronology)
@@ -357,7 +355,7 @@ def shc_selection_prop(current_eval, new_eval, T=10):
 def search_hillclimber_stochastic(jobs, n_iterations=100, merit_weight=10):
     i = 0
     while i < n_iterations:
-        current_chronology = random_chronology(jobs, requires_validity=True)
+        current_chronology = random_chronology(jobs)
         print(i)
         neighbors = find_neighbors(jobs, current_chronology)
         selected_neighbor = rand.choice(neighbors)
@@ -385,7 +383,7 @@ def search_simulatedannealing(jobs, n_iterations=100, initial_temp=100, min_temp
     i = 0
     best_schedule = None
     while i < n_iterations:
-        current_chronology = random_chronology(jobs, requires_validity=True)
+        current_chronology = random_chronology(jobs)
         current_schedule = chronology2schedule(jobs, current_chronology)
 
         if best_schedule is None:
@@ -422,6 +420,12 @@ def search_simulatedannealing(jobs, n_iterations=100, initial_temp=100, min_temp
 
 
     return best_schedule
+
+n_machines = -1
+
+def set_params(problem):
+    global n_machines
+    n_machines = problem.nr_machines
 
 # %%
 

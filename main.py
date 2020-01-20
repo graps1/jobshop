@@ -34,7 +34,7 @@ import jobshop_localsearch as jls
 from mapping import map_problem_to_jls
 from renderer import render_jls
 jobs = map_problem_to_jls(problem)
-chronology = { m: jls.gather_steps(m, jobs) for m in range(problem.nr_machines)}
-schedule = jls.chronology2schedule(jobs, chronology)
+jls.set_params(problem)
+schedule,_ = jls.search_hillclimber_iterated(jobs)
 render_jls(problem.nr_machines, problem.nr_jobs, schedule)
 
