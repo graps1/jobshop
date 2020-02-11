@@ -63,15 +63,26 @@ def all_2_swaps(steps: List[Step]) -> List[List[Step]]:
         Calculates all possible sequences of steps that may be created by
         swapping two steps of the given sequence.
     """
+    def index(l, val, fail):
+        try:
+            return l.index(val)
+        except:
+            return fail
 
     swaps = []
-    for first_idx, step1 in enumerate(steps):
-        for second_idx, step2 in enumerate(steps[first_idx:]):
-            if first_idx == first_idx + second_idx:
-                continue
+    for idx, step1 in enumerate(steps):
+        jobids = list(map(lambda step: step.job, steps))
+        left, right = [] if idx == 0 else jobids[idx-1::-1], jobids[idx+1:]
+        leftidx = max(0, idx - index(left, jobids[idx], 1))
+        rightidx = min(len(jobids), idx + 1 + index(right, jobids[idx], 1))
+        candidates = list(range(leftidx,rightidx))
+        candidates.remove(idx)
+        
+        for second_idx in candidates:
             swapped = list(steps)
-            swapped[first_idx], swapped[first_idx+second_idx] = swapped[first_idx+second_idx], swapped[first_idx]
-            swaps.append(swapped)
+            swapped[idx], swapped[second_idx] = swapped[second_idx], swapped[idx]
+            if swapped not in swaps:
+                swaps.append(swapped)
     return swaps
 
 # %%
@@ -299,23 +310,24 @@ def random_chronology(jobs) -> Chronology:
     choices = {m: [step for step in gather_steps(m,jobs) if step.step_id == 0] for m in range(n_machines)}
     # start w/ empty chronology
     chronology = {}
-    # contains steps which are already in the chronology
     # while we have steps left ...
     while any([len(choices[machine])>0 for machine in choices]):
-        # add one random step for each machine to the chronology
-        for machine in choices:
-            if machine not in chronology:
-                chronology[machine] = []
-            if len(choices[machine]) > 0:
-                choosen = rand.choice(choices[machine])
-                chronology[machine].append(choosen)
-                # remove the choosen step from the set of choices, but before that: 
-                # add its successor to the list of possible choices
-                if choosen.step_id + 1 < len(jobs[choosen.job]):
-                    next_step = jobs[choosen.job][choosen.step_id + 1]
-                    choices[next_step.machine].append(next_step)
-                choices[machine].remove(choosen)
+        # add one random step for a random machine to the chronology
+        choosen_machine = rand.choice([ m for m in choices if len(choices[m]) > 0 ])
+        if choosen_machine not in chronology:
+            chronology[choosen_machine] = []
+        choosen_step = rand.choice(choices[choosen_machine])
+        chronology[choosen_machine].append(choosen_step)
+        # remove the choosen step from the set of choices, but before that: 
+        # add its successor to the list of possible choices
+        if choosen_step.step_id + 1 < len(jobs[choosen_step.job]):
+            next_step = jobs[choosen_step.job][choosen_step.step_id + 1]
+            choices[next_step.machine].append(next_step)
+        choices[choosen_machine].remove(choosen_step)
     return chronology
+
+def __print_progress(search, i,n_iterations):
+    print("{}: {:3.2f}%".format(search, 100*(i+1)/n_iterations), end="\r")
 
 # %%
 
@@ -327,7 +339,7 @@ def search_hillclimber_iterated(jobs, n_iterations=10):
     i = 0
     while i < n_iterations:
         s = 0
-        print("{}/{}".format(str(i+1).zfill(len(str(n_iterations))), n_iterations), end="\r")
+        __print_progress("hillclimber iterated", i, n_iterations)
         current_chronology = random_chronology(jobs)
         plateaued = False
         while not plateaued:
@@ -382,19 +394,25 @@ def cool_down(current_chronology, iterations, temp, temp_max, cooling_ratio):
 def search_simulatedannealing(jobs, n_iterations=100, initial_temp=100, min_temp=0.5, max_temp=100, cooling_ratio=.5):
     i = 0
     best_schedule = None
+    vals = []
+
     while i < n_iterations:
         current_chronology = random_chronology(jobs)
         current_schedule = chronology2schedule(jobs, current_chronology)
+        __print_progress("simulated annealing", i, n_iterations)
 
         if best_schedule is None:
             best_schedule = current_schedule
 
-        print("## Run", i)
+        # print("## Run", i)
         temp = initial_temp
         r = 0
         while temp > min_temp:
-            print("temp={}".format(temp))
+            # print("temp={}".format(temp))
             neighbors = find_neighbors(jobs, current_chronology)
+            if len(neighbors) == 0:
+                break
+
             selected_neighbor = rand.choice(neighbors)
             selected_schedule = selected_neighbor[1]
             selection_eval = selected_schedule.duration()
@@ -416,10 +434,10 @@ def search_simulatedannealing(jobs, n_iterations=100, initial_temp=100, min_temp
 
         if current_schedule.duration() < best_schedule.duration():
             best_schedule = current_schedule
-            print("New best:", best_schedule.duration())
+            # print("New best:", best_schedule.duration())
+        vals.append(best_schedule.duration())
 
-
-    return best_schedule
+    return best_schedule, vals
 
 n_machines = -1
 
